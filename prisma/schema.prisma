@@ -53,7 +53,7 @@ model Medicine {
   id                  String         @id @default(auto()) @map("_id") @db.ObjectId
   
   // === REQUIRED FIELDS (3 Mandatory) ===
-  name                String
+  name                String         @unique
   sellingPrice        Float          // Non-negative monetary amount (rounded to 2 decimal places in service layer)
   quantity            Float          // Non-negative quantity (supports fractional/divisible quantities up to 3 decimals)
 

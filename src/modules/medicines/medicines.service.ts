@@ -41,6 +41,21 @@ export class MedicinesService {
       onlinePurchaseUrl,
     } = createMedicineDto;
 
+    // Enforce name uniqueness among active medicines
+    const trimmedName = name.trim();
+    const existingWithName = await this.prisma.medicine.findFirst({
+      where: {
+        name: { equals: trimmedName, mode: 'insensitive' },
+        isDeleted: false,
+      },
+    });
+
+    if (existingWithName) {
+      throw new ConflictException(
+        `A medicine with the name '${trimmedName}' already exists (এই নামের মেডিসিন ইতিমধ্যে বিদ্যমান).`,
+      );
+    }
+
     // Enforce barcode uniqueness among active medicines when barcode is supplied
     if (barcode && barcode.trim() !== '') {
       const existingWithBarcode = await this.prisma.medicine.findFirst({
@@ -309,7 +324,22 @@ export class MedicinesService {
 
     const updateData: Prisma.MedicineUpdateInput = {};
 
-    if (updateDto.name !== undefined) updateData.name = updateDto.name.trim();
+    if (updateDto.name !== undefined) {
+      const trimmedName = updateDto.name.trim();
+      const conflict = await this.prisma.medicine.findFirst({
+        where: {
+          name: { equals: trimmedName, mode: 'insensitive' },
+          isDeleted: false,
+          NOT: { id },
+        },
+      });
+      if (conflict) {
+        throw new ConflictException(
+          `A medicine with the name '${trimmedName}' already exists (এই নামের মেডিসিন ইতিমধ্যে বিদ্যমান).`,
+        );
+      }
+      updateData.name = trimmedName;
+    }
     if (updateDto.sellingPrice !== undefined) updateData.sellingPrice = roundCurrency(updateDto.sellingPrice) ?? 0;
     if (updateDto.quantity !== undefined) updateData.quantity = roundQuantity(updateDto.quantity);
     if (updateDto.genericName !== undefined) updateData.genericName = updateDto.genericName ? updateDto.genericName.trim() : null;

@@ -135,47 +135,84 @@ export class SyncService {
     const payload = op.payload;
     const sellingPrice = roundCurrency(payload.sellingPrice);
     const quantity = roundQuantity(payload.quantity);
+    const trimmedName = payload.name.trim();
 
-    const created = await this.prisma.medicine.create({
-      data: {
-        name: payload.name.trim(),
-        sellingPrice,
-        quantity,
-        genericName: payload.genericName ? payload.genericName.trim() : null,
-        brandName: payload.brandName ? payload.brandName.trim() : null,
-        manufacturer: payload.manufacturer ? payload.manufacturer.trim() : null,
-        strength: payload.strength ? payload.strength.trim() : null,
-        dosageForm: payload.dosageForm ? payload.dosageForm.trim() : null,
-        category: payload.category ? payload.category.trim() : null,
-        barcode: payload.barcode ? payload.barcode.trim() : null,
-        purchasePrice: payload.purchasePrice !== undefined && payload.purchasePrice !== null ? roundCurrency(payload.purchasePrice) : null,
-        minimumStock: payload.minimumStock !== undefined && payload.minimumStock !== null ? roundQuantity(payload.minimumStock) : null,
-        rackLocation: payload.rackLocation ? payload.rackLocation.trim() : null,
-        supplierName: payload.supplierName ? payload.supplierName.trim() : null,
-        batchNumber: payload.batchNumber ? payload.batchNumber.trim() : null,
-        expiryDate: payload.expiryDate ? new Date(payload.expiryDate) : null,
-        imageUrl: payload.imageUrl || null,
-        notes: payload.notes || null,
-        onlinePurchaseUrl: payload.onlinePurchaseUrl || null,
+    // Check if active medicine with this exact name already exists on backend
+    const existing = await this.prisma.medicine.findFirst({
+      where: {
+        name: { equals: trimmedName, mode: 'insensitive' },
+        isDeleted: false,
       },
-      include: { batches: true },
     });
 
-    // Record initial stock movement
-    if (quantity > 0) {
-      await this.prisma.stockHistory.create({
+    let created;
+    if (existing) {
+      created = await this.prisma.medicine.update({
+        where: { id: existing.id },
         data: {
-          medicineId: created.id,
-          userId,
-          changeType: InventoryChangeType.INITIAL_STOCK,
-          quantityBefore: 0,
-          quantityChanged: quantity,
-          quantityAfter: quantity,
-          batchNumber: created.batchNumber,
-          unitPurchaseCost: created.purchasePrice,
-          reason: 'Initial stock on creation (offline sync)',
+          sellingPrice: sellingPrice || existing.sellingPrice,
+          quantity: quantity !== undefined ? quantity : existing.quantity,
+          genericName: payload.genericName ? payload.genericName.trim() : existing.genericName,
+          brandName: payload.brandName ? payload.brandName.trim() : existing.brandName,
+          manufacturer: payload.manufacturer ? payload.manufacturer.trim() : existing.manufacturer,
+          strength: payload.strength ? payload.strength.trim() : existing.strength,
+          dosageForm: payload.dosageForm ? payload.dosageForm.trim() : existing.dosageForm,
+          category: payload.category ? payload.category.trim() : existing.category,
+          barcode: payload.barcode ? payload.barcode.trim() : existing.barcode,
+          purchasePrice: payload.purchasePrice !== undefined && payload.purchasePrice !== null ? roundCurrency(payload.purchasePrice) : existing.purchasePrice,
+          minimumStock: payload.minimumStock !== undefined && payload.minimumStock !== null ? roundQuantity(payload.minimumStock) : existing.minimumStock,
+          rackLocation: payload.rackLocation ? payload.rackLocation.trim() : existing.rackLocation,
+          supplierName: payload.supplierName ? payload.supplierName.trim() : existing.supplierName,
+          batchNumber: payload.batchNumber ? payload.batchNumber.trim() : existing.batchNumber,
+          expiryDate: payload.expiryDate ? new Date(payload.expiryDate) : existing.expiryDate,
+          imageUrl: payload.imageUrl || existing.imageUrl,
+          notes: payload.notes || existing.notes,
+          onlinePurchaseUrl: payload.onlinePurchaseUrl || existing.onlinePurchaseUrl,
         },
+        include: { batches: true },
       });
+    } else {
+      created = await this.prisma.medicine.create({
+        data: {
+          name: trimmedName,
+          sellingPrice,
+          quantity,
+          genericName: payload.genericName ? payload.genericName.trim() : null,
+          brandName: payload.brandName ? payload.brandName.trim() : null,
+          manufacturer: payload.manufacturer ? payload.manufacturer.trim() : null,
+          strength: payload.strength ? payload.strength.trim() : null,
+          dosageForm: payload.dosageForm ? payload.dosageForm.trim() : null,
+          category: payload.category ? payload.category.trim() : null,
+          barcode: payload.barcode ? payload.barcode.trim() : null,
+          purchasePrice: payload.purchasePrice !== undefined && payload.purchasePrice !== null ? roundCurrency(payload.purchasePrice) : null,
+          minimumStock: payload.minimumStock !== undefined && payload.minimumStock !== null ? roundQuantity(payload.minimumStock) : null,
+          rackLocation: payload.rackLocation ? payload.rackLocation.trim() : null,
+          supplierName: payload.supplierName ? payload.supplierName.trim() : null,
+          batchNumber: payload.batchNumber ? payload.batchNumber.trim() : null,
+          expiryDate: payload.expiryDate ? new Date(payload.expiryDate) : null,
+          imageUrl: payload.imageUrl || null,
+          notes: payload.notes || null,
+          onlinePurchaseUrl: payload.onlinePurchaseUrl || null,
+        },
+        include: { batches: true },
+      });
+
+      // Record initial stock movement
+      if (quantity > 0) {
+        await this.prisma.stockHistory.create({
+          data: {
+            medicineId: created.id,
+            userId,
+            changeType: InventoryChangeType.INITIAL_STOCK,
+            quantityBefore: 0,
+            quantityChanged: quantity,
+            quantityAfter: quantity,
+            batchNumber: created.batchNumber,
+            unitPurchaseCost: created.purchasePrice,
+            reason: 'Initial stock on creation (offline sync)',
+          },
+        });
+      }
     }
 
     return {
@@ -188,13 +225,61 @@ export class SyncService {
     };
   }
 
+
+  /**
+   * Helper to safely find a medicine by ObjectId, client entity ID, or name
+   */
+  private async resolveMedicine(entityId: string, payload?: any): Promise<any> {
+    if (!entityId) return null;
+
+    // 1. If valid 24-character hexadecimal ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(entityId)) {
+      const med = await this.prisma.medicine.findUnique({
+        where: { id: entityId },
+      });
+      if (med) return med;
+    }
+
+    // 2. Check if this client ID was mapped to a server ID in a previous CREATE_MEDICINE operation
+    const previousCreate = await this.prisma.processedSyncOperation.findFirst({
+      where: {
+        entityId,
+        operationType: SyncOperationType.CREATE_MEDICINE,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (previousCreate) {
+      try {
+        const parsed = JSON.parse(previousCreate.result);
+        if (parsed?.serverId && /^[0-9a-fA-F]{24}$/.test(parsed.serverId)) {
+          const med = await this.prisma.medicine.findUnique({
+            where: { id: parsed.serverId },
+          });
+          if (med) return med;
+        }
+      } catch {}
+    }
+
+    // 3. Fallback: match by medicine name if provided
+    if (payload?.name) {
+      const medByName = await this.prisma.medicine.findFirst({
+        where: {
+          name: { equals: payload.name.trim(), mode: 'insensitive' },
+          isDeleted: false,
+        },
+      });
+      if (medByName) return medByName;
+    }
+
+    return null;
+  }
+
   private async handleUpdateMedicine(op: SyncOperationDto): Promise<OperationResult> {
     const payload = op.payload;
     const targetId = op.entityId;
 
-    const existing = await this.prisma.medicine.findUnique({
-      where: { id: targetId },
-    });
+    const existing = await this.resolveMedicine(targetId, payload);
 
     if (!existing) {
       return {
@@ -226,7 +311,7 @@ export class SyncService {
     if (payload.onlinePurchaseUrl !== undefined) updateData.onlinePurchaseUrl = payload.onlinePurchaseUrl || null;
 
     const updated = await this.prisma.medicine.update({
-      where: { id: targetId },
+      where: { id: existing.id },
       data: updateData,
       include: { batches: true },
     });
@@ -235,6 +320,7 @@ export class SyncService {
       operationId: op.operationId,
       success: true,
       entityId: targetId,
+      clientId: op.clientId || targetId,
       serverId: updated.id,
       record: updated,
     };
@@ -242,20 +328,19 @@ export class SyncService {
 
   private async handleDeleteMedicine(op: SyncOperationDto): Promise<OperationResult> {
     const targetId = op.entityId;
-    const existing = await this.prisma.medicine.findUnique({
-      where: { id: targetId },
-    });
+    const existing = await this.resolveMedicine(targetId, op.payload);
 
     if (!existing) {
       return {
         operationId: op.operationId,
         success: true, // Idempotent: already deleted/missing
         entityId: targetId,
+        clientId: op.clientId || targetId,
       };
     }
 
     await this.prisma.medicine.update({
-      where: { id: targetId },
+      where: { id: existing.id },
       data: { isDeleted: true, deletedAt: new Date() },
     });
 
@@ -263,7 +348,8 @@ export class SyncService {
       operationId: op.operationId,
       success: true,
       entityId: targetId,
-      serverId: targetId,
+      clientId: op.clientId || targetId,
+      serverId: existing.id,
     };
   }
 
@@ -271,15 +357,14 @@ export class SyncService {
     const { delta, reason, changeType } = op.payload;
     const targetId = op.entityId;
 
-    const med = await this.prisma.medicine.findUnique({
-      where: { id: targetId },
-    });
+    const med = await this.resolveMedicine(targetId, op.payload);
 
     if (!med) {
       return {
         operationId: op.operationId,
         success: false,
         entityId: targetId,
+        clientId: op.clientId || targetId,
         error: `Medicine ${targetId} not found`,
       };
     }
@@ -289,13 +374,13 @@ export class SyncService {
     const qtyAfter = Math.max(0, roundQuantity(qtyBefore + qtyChange));
 
     const updated = await this.prisma.medicine.update({
-      where: { id: targetId },
+      where: { id: med.id },
       data: { quantity: qtyAfter },
     });
 
     await this.prisma.stockHistory.create({
       data: {
-        medicineId: targetId,
+        medicineId: med.id,
         userId,
         changeType: (changeType as InventoryChangeType) || InventoryChangeType.STOCK_ADJUSTMENT,
         quantityBefore: qtyBefore,
@@ -309,6 +394,7 @@ export class SyncService {
       operationId: op.operationId,
       success: true,
       entityId: targetId,
+      clientId: op.clientId || targetId,
       serverId: updated.id,
       record: updated,
     };
@@ -318,15 +404,14 @@ export class SyncService {
     const { quantity, batchNumber, expiryDate, purchasePrice, reason, supplierName } = op.payload;
     const targetId = op.entityId;
 
-    const med = await this.prisma.medicine.findUnique({
-      where: { id: targetId },
-    });
+    const med = await this.resolveMedicine(targetId, op.payload);
 
     if (!med) {
       return {
         operationId: op.operationId,
         success: false,
         entityId: targetId,
+        clientId: op.clientId || targetId,
         error: `Medicine ${targetId} not found`,
       };
     }
@@ -336,7 +421,7 @@ export class SyncService {
     const qtyAfter = roundQuantity(qtyBefore + qtyReceived);
 
     const updated = await this.prisma.medicine.update({
-      where: { id: targetId },
+      where: { id: med.id },
       data: {
         quantity: qtyAfter,
         ...(supplierName ? { supplierName: supplierName.trim() } : {}),
@@ -345,7 +430,7 @@ export class SyncService {
 
     if (batchNumber) {
       const existingBatch = await this.prisma.batch.findFirst({
-        where: { medicineId: targetId, batchNumber: batchNumber.trim() },
+        where: { medicineId: med.id, batchNumber: batchNumber.trim() },
       });
 
       if (existingBatch) {
@@ -360,7 +445,7 @@ export class SyncService {
       } else {
         await this.prisma.batch.create({
           data: {
-            medicineId: targetId,
+            medicineId: med.id,
             batchNumber: batchNumber.trim(),
             quantity: qtyReceived,
             expiryDate: expiryDate ? new Date(expiryDate) : null,
@@ -372,7 +457,7 @@ export class SyncService {
 
     await this.prisma.stockHistory.create({
       data: {
-        medicineId: targetId,
+        medicineId: med.id,
         userId,
         changeType: InventoryChangeType.STOCK_RECEIVED,
         quantityBefore: qtyBefore,
@@ -388,6 +473,7 @@ export class SyncService {
       operationId: op.operationId,
       success: true,
       entityId: targetId,
+      clientId: op.clientId || targetId,
       serverId: updated.id,
       record: updated,
     };
