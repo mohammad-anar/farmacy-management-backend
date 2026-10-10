@@ -40,6 +40,14 @@ class EnvironmentVariables {
   @IsString()
   @IsOptional()
   INITIAL_OWNER_PASSWORD: string = 'PharmacyAdmin123!';
+
+  @IsString()
+  @IsOptional()
+  INITIAL_OWNER_NAME: string = 'Pharmacy Owner';
+
+  @IsString()
+  @IsOptional()
+  INITIAL_PHARMACY_NAME: string = 'Personal Pharmacy';
 }
 
 export function validateEnv(config: Record<string, unknown>) {
