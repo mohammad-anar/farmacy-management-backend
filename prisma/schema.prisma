@@ -1,0 +1,146 @@
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  OWNER
+}
+
+enum InventoryChangeType {
+  INITIAL_STOCK
+  STOCK_RECEIVED
+  STOCK_ADJUSTMENT
+  STOCK_CORRECTION
+  DAMAGED_EXPIRED
+  RETURN_TO_SUPPLIER
+}
+
+model User {
+  id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  email           String         @unique
+  passwordHash    String
+  name            String
+  pharmacyName    String?
+  role            Role           @default(OWNER)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  refreshTokens   RefreshToken[]
+  stockHistories  StockHistory[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash   String    @unique
+  userId      String    @db.ObjectId
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Medicine {
+  id                  String         @id @default(auto()) @map("_id") @db.ObjectId
+  
+  // === REQUIRED FIELDS (3 Mandatory) ===
+  name                String
+  sellingPrice        Float          // Non-negative monetary amount (rounded to 2 decimal places in service layer)
+  quantity            Float          // Non-negative quantity (supports fractional/divisible quantities up to 3 decimals)
+
+  // === OPTIONAL FIELDS (All strictly Nullable) ===
+  genericName         String?
+  brandName           String?
+  manufacturer        String?
+  strength            String?
+  dosageForm          String?
+  category            String?
+  barcode             String?
+  purchasePrice       Float?         // Buy/Cost price per unit (preserves null when not provided)
+  minimumStock        Float?         // Minimum threshold before triggering low-stock alert
+  rackLocation        String?        // Shelf / Rack / Location identifier
+  supplierName        String?
+  batchNumber         String?        // Latest or default batch code
+  expiryDate          DateTime?      // Medicine expiry date
+  imageUrl            String?
+  notes               String?
+  onlinePurchaseUrl   String?        // External vendor/reorder link
+
+  // Audit metadata
+  isDeleted           Boolean        @default(false)
+  deletedAt           DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  // Relational data
+  stockHistories      StockHistory[]
+  batches             Batch[]
+
+  // Indexes for high-speed catalog lookup and alerts
+  @@index([isDeleted, name])
+  @@index([isDeleted, genericName])
+  @@index([isDeleted, barcode])
+  @@index([isDeleted, quantity])
+  @@index([isDeleted, expiryDate])
+  @@map("medicines")
+}
+
+model Batch {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  medicineId    String    @db.ObjectId
+  medicine      Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  
+  batchNumber   String    // Lot / Batch identifier
+  quantity      Float     // Stock quantity in this specific batch
+  expiryDate    DateTime? // Expiration date for this batch
+  purchasePrice Float?    // Specific purchase price for this batch
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([medicineId])
+  @@map("batches")
+}
+
+model StockHistory {
+  id              String              @id @default(auto()) @map("_id") @db.ObjectId
+  medicineId      String              @db.ObjectId
+  medicine        Medicine            @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  userId          String              @db.ObjectId
+  user            User                @relation(fields: [userId], references: [id])
+  
+  changeType      InventoryChangeType
+  quantityBefore  Float
+  quantityChanged Float               // Positive for additions, negative for reductions
+  quantityAfter   Float
+  
+  batchNumber     String?             // Batch associated with this specific stock movement
+  unitPurchaseCost Float?             // Unit purchase cost at time of stock-in
+  reason          String?             // Reason / Notes / Invoice reference
+  timestamp       DateTime            @default(now())
+
+  @@index([medicineId, timestamp])
+  @@map("stock_histories")
+}
+
+model ProcessedSyncOperation {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  clientOperationId String   @unique
+  operationType     String
+  entityType        String
+  entityId          String
+  result            String   // JSON serialized result for idempotency caching
+  createdAt         DateTime @default(now())
+
+  @@map("processed_sync_operations")
+}
+
