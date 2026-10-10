@@ -8,6 +8,7 @@ import { MedicinesModule } from './modules/medicines/medicines.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SyncModule } from './modules/sync/sync.module';
+import { AppController } from './app.controller';
 import { validateEnv } from './config/env.validation';
 
 @Module({
@@ -31,5 +32,6 @@ import { validateEnv } from './config/env.validation';
     DashboardModule,
     SyncModule,
   ],
+  controllers: [AppController],
 })
 export class AppModule {}

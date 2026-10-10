@@ -19,8 +19,10 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Global Prefix: /api/v1
-  app.setGlobalPrefix('api/v1');
+  // Global Prefix: /api/v1 (Exclude root / and /health)
+  app.setGlobalPrefix('api/v1', {
+    exclude: ['/', 'health'],
+  });
 
   // Global Validation
   app.useGlobalPipes(
